@@ -1,79 +1,97 @@
 import streamlit as st
-import faiss_cpu as faiss
 import numpy as np
+import faiss_cpu as faiss
 from sentence_transformers import SentenceTransformer
 
+# ----------------------------------------------------
+# STREAMLIT PAGE SETUP
+# ----------------------------------------------------
+st.set_page_config(page_title="Local RAG Chatbot", layout="centered")
 
-st.set_page_config(page_title="Local RAG Chatbot", layout="wide")
+st.title("📘 Local RAG Chatbot (FAISS + MiniLM)")
+st.write("Ask questions based on your uploaded document.")
 
-# -----------------------------------
-# INITIALIZE SESSION STATE VARIABLES
-# -----------------------------------
-if "vector" not in st.session_state:
-    st.session_state.vector = None
+# ----------------------------------------------------
+# LOAD LOCAL EMBEDDING MODEL (CACHED)
+# ----------------------------------------------------
+@st.cache_resource
+def load_embedder():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
+embedder = load_embedder()
+
+# ----------------------------------------------------
+# LOAD FAISS INDEX (CACHED)
+# ----------------------------------------------------
+@st.cache_resource
+def load_faiss_index():
+    index = faiss.read_index("faiss_index.index")
+    return index
+
+index = load_faiss_index()
+
+# ----------------------------------------------------
+# LOAD CHUNKS (CACHED)
+# ----------------------------------------------------
+@st.cache_resource
+def load_chunks():
+    return np.load("chunks.npy", allow_pickle=True)
+
+chunks = load_chunks()
+
+# ----------------------------------------------------
+# RAG QUERY FUNCTION WITH THRESHOLD
+# ----------------------------------------------------
+def query_rag(user_query, top_k=3, threshold=0.25):
+
+    # Embed the query
+    vec = embedder.encode([user_query], convert_to_numpy=True)
+    faiss.normalize_L2(vec)
+
+    # FAISS search
+    D, I = index.search(vec, top_k)
+
+    best_score = float(D[0][0])
+
+    # Debug similarity score (optional)
+    st.write(f"🔍 Similarity Score: {best_score}")
+
+    # Out-of-domain detection
+    if best_score < threshold:
+        return "I don’t know the answer. It is outside my knowledge."
+
+    # Retrieve best chunks
+    retrieved = [chunks[i] for i in I[0]]
+    answer = "\n\n".join(retrieved)
+
+    return answer
+
+# ----------------------------------------------------
+# CHAT HISTORY
+# ----------------------------------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-
-# -----------------------------------
-# SHOW Chat History Like ChatGPT
-# -----------------------------------
-st.title("📘 Local PDF RAG Chatbot")
-
+# Display chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
+# ----------------------------------------------------
+# CHAT INPUT (THIS FIXES THE REPEATING TEXT ISSUE)
+# ----------------------------------------------------
+user_input = st.chat_input("Ask anything from your document...")
 
-# -----------------------------------
-# PDF Upload and Vector Creation (Runs Once Only)
-# -----------------------------------
-uploaded_pdf = st.file_uploader("Upload PDF", type="pdf")
-
-if uploaded_pdf and st.session_state.vector is None:
-    loader = PyPDFLoader(uploaded_pdf)
-    pages = loader.load()
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = splitter.split_documents(pages)
-
-    embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-
-    st.session_state.vector = FAISS.from_documents(chunks, embedder)
-
-    st.success("PDF successfully processed and Vector DB is ready!")
-
-
-# -----------------------------------
-# CHAT INPUT — THIS IS THE PART THAT FIXES EVERYTHING
-# -----------------------------------
-user_input = st.chat_input("Ask something about the PDF...")
-
-if user_input and st.session_state.vector:
-
-    # 1️⃣ Save user message
+if user_input:
+    # Add user message
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # 2️⃣ Search in FAISS
-    results = st.session_state.vector.similarity_search(user_input, k=3)
+    # Get RAG response
+    bot_response = query_rag(user_input)
 
-    if len(results) == 0:
-        bot_reply = "I don’t know the answer. It is outside my knowledge."
-    else:
-        context = "\n".join([d.page_content for d in results])
+    # Add bot message
+    st.session_state.messages.append({"role": "assistant", "content": bot_response})
 
-        # Since you're using local mode (no OpenAI), the answer must be simple
-        # Here we return the extracted context directly
-        bot_reply = f"Here is what I found:\n\n{context}"
-
-    # 3️⃣ Save bot message
-    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
-
-    # 4️⃣ Display bot answer
+    # Immediately display bot message
     with st.chat_message("assistant"):
-        st.write(bot_reply)
-
-
-elif user_input and st.session_state.vector is None:
-    st.warning("Please upload a PDF first!")
+        st.write(bot_response)
