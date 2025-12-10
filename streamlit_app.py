@@ -3,6 +3,8 @@ import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+st.set_page_config(page_title="PDF Chatbot", page_icon="🤖")
+
 st.title("PDF Chatbot (Local Embeddings)")
 
 # ------------------------
@@ -26,6 +28,7 @@ def load_model():
     return model
 
 model = load_model()
+st.success("Embedding model loaded")
 
 # ------------------------
 # Initialize chat history
@@ -43,7 +46,7 @@ def get_response(query, top_k=3):
     q_vec = model.encode([query], convert_to_numpy=True)
     faiss.normalize_L2(q_vec)
     
-    # Search FAISS
+    # Search FAISS index
     D, I = index.search(q_vec, top_k)
     
     # Retrieve top chunks
@@ -66,5 +69,6 @@ for sender, message in st.session_state.chat_history:
         st.markdown(f"**You:** {message}")
     else:
         st.markdown(f"**Bot:** {message}")
+
 
 
