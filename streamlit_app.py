@@ -1,116 +1,79 @@
 import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.llms import OpenAI
 
-st.set_page_config(page_title="RAG Chat", layout="wide")
+st.set_page_config(page_title="Local RAG Chatbot", layout="wide")
 
-st.title("📘 PDF RAG Chatbot")
+# -----------------------------------
+# INITIALIZE SESSION STATE VARIABLES
+# -----------------------------------
+if "vector" not in st.session_state:
+    st.session_state.vector = None
 
-# --------------------------
-# SESSION STATE FIX (VERY IMPORTANT)
-# --------------------------
-if "vector_db" not in st.session_state:
-    st.session_state.vector_db = None
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "last_question" not in st.session_state:
-    st.session_state.last_question = ""
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 
-# --------------------------
-# PDF Upload — RUNS ONLY ONCE
-# --------------------------
+# -----------------------------------
+# SHOW Chat History Like ChatGPT
+# -----------------------------------
+st.title("📘 Local PDF RAG Chatbot")
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+
+# -----------------------------------
+# PDF Upload and Vector Creation (Runs Once Only)
+# -----------------------------------
 uploaded_pdf = st.file_uploader("Upload PDF", type="pdf")
 
-if uploaded_pdf and st.session_state.vector_db is None:
-    from langchain.document_loaders import PyPDFLoader
-
+if uploaded_pdf and st.session_state.vector is None:
     loader = PyPDFLoader(uploaded_pdf)
     pages = loader.load()
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50
-    )
-
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(pages)
 
     embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
 
-    st.session_state.vector_db = FAISS.from_documents(chunks, embedder)
-    st.success("Vector DB created successfully!")
+    st.session_state.vector = FAISS.from_documents(chunks, embedder)
+
+    st.success("PDF successfully processed and Vector DB is ready!")
 
 
-# --------------------------
-# CHAT INPUT BOX (Fixed, Stable, One Location)
-# --------------------------
-question = st.text_input("Ask your question:", value="", key="question_box")
+# -----------------------------------
+# CHAT INPUT — THIS IS THE PART THAT FIXES EVERYTHING
+# -----------------------------------
+user_input = st.chat_input("Ask something about the PDF...")
 
+if user_input and st.session_state.vector:
 
-# ---------------------------------------------------
-# PROCESS QUERY ONLY WHEN BUTTON CLICKED (NOT TYPING)
-# ---------------------------------------------------
-if st.button("Submit"):
-    if question.strip() == "":
-        st.warning("Type a question.")
-    elif st.session_state.vector_db is None:
-        st.error("Upload a PDF first.")
+    # 1️⃣ Save user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # 2️⃣ Search in FAISS
+    results = st.session_state.vector.similarity_search(user_input, k=3)
+
+    if len(results) == 0:
+        bot_reply = "I don’t know the answer. It is outside my knowledge."
     else:
-        # Prevent repeated execution
-        if question != st.session_state.last_question:
+        context = "\n".join([d.page_content for d in results])
 
-            st.session_state.last_question = question
+        # Since you're using local mode (no OpenAI), the answer must be simple
+        # Here we return the extracted context directly
+        bot_reply = f"Here is what I found:\n\n{context}"
 
-            # Retrieve relevant context
-            docs = st.session_state.vector_db.similarity_search(question, k=3)
-            context = "\n\n".join([d.page_content for d in docs])
+    # 3️⃣ Save bot message
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
 
-            # LLM call
-            llm = OpenAI(model="gpt-4o-mini", temperature=0)
-            prompt = f"""
-            Use this context to answer:
-
-            Context:
-            {context}
-
-            Question:
-            {question}
-
-            Give a simple answer.
-            """
-            answer = llm(prompt)
-
-            # Add to history
-            st.session_state.history.append(("You", question))
-            st.session_state.history.append(("Bot", answer))
-
-        else:
-            st.info("Already answered this question.")
+    # 4️⃣ Display bot answer
+    with st.chat_message("assistant"):
+        st.write(bot_reply)
 
 
-# --------------------------
-# SHOW ANSWER AREA
-# --------------------------
-st.markdown("### 🧠 Latest Answer")
-
-if st.session_state.history:
-    last_role, last_msg = st.session_state.history[-1]
-    if last_role == "Bot":
-        st.write(last_msg)
-
-
-# --------------------------
-# CHAT HISTORY
-# --------------------------
-st.markdown("---")
-st.markdown("### 📝 Chat History")
-
-for role, msg in st.session_state.history:
-    if role == "You":
-        st.markdown(f"**🧑‍💼 {role}:** {msg}")
-    else:
-        st.markdown(f"**🤖 {role}:** {msg}")
+elif user_input and st.session_state.vector is None:
+    st.warning("Please upload a PDF first!")
