@@ -1,8 +1,8 @@
 import streamlit as st
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import FAISS
-from langchain.embeddings import HuggingFaceEmbeddings
+import faiss_cpu as faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
 
 st.set_page_config(page_title="Local RAG Chatbot", layout="wide")
 
