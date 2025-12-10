@@ -1,82 +1,105 @@
 import streamlit as st
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.llms import OpenAI
 
-# ---------------------------------------------
-# Load Embedding Model (LOCAL MODEL)
-# ---------------------------------------------
-@st.cache_resource
-def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+# ---------------------------
+# Streamlit Config
+# ---------------------------
+st.set_page_config(page_title="RAG App", layout="wide")
 
-model = load_model()
+st.title("📘 PDF based RAG Chatbot")
 
-# ---------------------------------------------
-# Load FAISS Index
-# ---------------------------------------------
-@st.cache_resource
-def load_faiss():
-    index = faiss.read_index("faiss_index.index")
-    return index
+# ---------------------------
+# SESSION STATE INIT
+# ---------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-index = load_faiss()
+if "vector_db" not in st.session_state:
+    st.session_state.vector_db = None
 
-# ---------------------------------------------
-# Load Chunks
-# ---------------------------------------------
-@st.cache_resource
-def load_chunks():
-    return np.load("chunks.npy", allow_pickle=True)
 
-chunks = load_chunks()
+# ---------------------------
+# PDF UPLOAD + VECTOR DB BUILD
+# ---------------------------
+uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
 
-# ---------------------------------------------
-# Query Function with Threshold
-# ---------------------------------------------
-def get_response(query, top_k=3, threshold=0.15):
-    # Embed query
-    q_vec = model.encode([query], convert_to_numpy=True)
-    faiss.normalize_L2(q_vec)
+if uploaded_file is not None:
+    from langchain.document_loaders import PyPDFLoader
 
-    # Search FAISS
-    D, I = index.search(q_vec, top_k)
+    loader = PyPDFLoader(uploaded_file)
+    doc_pages = loader.load()
 
-    best_score = float(D[0][0])
+    # Chunking
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
+    )
+    docs = text_splitter.split_documents(doc_pages)
 
-    # Debug: Show similarity score
-    st.write("🔍 Similarity Score:", best_score)
+    # Embedding model
+    embed = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
 
-    # Unknown-question detection
-    if best_score < threshold:
-        return "I don’t know the answer. It is outside my knowledge."
+    # Build vector DB
+    st.session_state.vector_db = FAISS.from_documents(docs, embed)
 
-    # Retrieve matching chunks
-    results = [chunks[idx] for idx in I[0]]
-    return "\n\n".join(results)
+    st.success("PDF processed & vector database created!")
 
-# ---------------------------------------------
-# Streamlit Chat UI
-# ---------------------------------------------
-st.title("📘 Local RAG Chatbot (FAISS + MiniLM)")
 
-# Initialize chat history
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# ---------------------------
+# CHAT UI
+# ---------------------------
+st.subheader("💬 Ask your question")
 
-# Chat history display
-for role, message in st.session_state.chat_history:
-    if role == "You":
-        st.write(f"🧑 **You:** {message}")
+query = st.text_input("Type your question here:")
+
+if st.button("Submit Query"):
+    if not query.strip():
+        st.warning("Please type a question.")
+    elif st.session_state.vector_db is None:
+        st.error("Please upload a PDF first.")
     else:
-        st.write(f"🤖 **Bot:** {message}")
+        # Retrieve from vector DB
+        docs = st.session_state.vector_db.similarity_search(query, k=3)
 
-# User input
-user_input = st.text_input("Ask your question:")
+        context = "\n\n".join([d.page_content for d in docs])
 
-# Handle query
-if user_input:
-    answer = get_response(user_input)
-    st.session_state.chat_history.append(("You", user_input))
-    st.session_state.chat_history.append(("Bot", answer))
-    st.rerun()
+        # LLM Call (example OpenAI)
+        llm = OpenAI(model="gpt-4o-mini", temperature=0)
+
+        prompt = f"""
+        You are a PDF-based assistant.
+
+        Context:
+        {context}
+
+        Question:
+        {query}
+
+        Answer in simple terms:"""
+
+        answer = llm(prompt)
+
+        # Store conversation
+        st.session_state.messages.append(("user", query))
+        st.session_state.messages.append(("assistant", answer))
+
+        # Display the answer once
+        st.write("### 🧠 Answer:")
+        st.write(answer)
+
+
+# ---------------------------
+# SHOW CHAT HISTORY
+# ---------------------------
+st.markdown("---")
+st.write("### 📝 Previous Q&A")
+
+for role, msg in st.session_state.messages:
+    if role == "user":
+        st.markdown(f"**🧑 You:** {msg}")
+    else:
+        st.markdown(f"**🤖 Assistant:** {msg}")
+
