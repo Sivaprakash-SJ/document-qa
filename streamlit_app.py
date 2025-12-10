@@ -1,53 +1,69 @@
 import streamlit as st
-from openai import OpenAI
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
-# Show title and description.
-st.title("📄 Document question answering")
-st.write(
-    "Upload a document below and ask a question about it – GPT will answer! "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-)
+st.title("PDF Chatbot (Local Embeddings)")
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+# ------------------------
+# Load FAISS index and chunks
+# ------------------------
+@st.cache_data(show_spinner=True)
+def load_faiss_index():
+    index = faiss.read_index("faiss_index.index")
+    chunks = np.load("chunks.npy", allow_pickle=True)
+    return index, chunks
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+index, chunks = load_faiss_index()
+st.success(f"FAISS index loaded with {index.ntotal} vectors, {len(chunks)} chunks.")
 
-    # Let the user upload a file via `st.file_uploader`.
-    uploaded_file = st.file_uploader(
-        "Upload a document (.txt or .md)", type=("txt", "md")
-    )
+# ------------------------
+# Load local embedding model
+# ------------------------
+@st.cache_resource(show_spinner=True)
+def load_model():
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    return model
 
-    # Ask the user for a question via `st.text_area`.
-    question = st.text_area(
-        "Now ask a question about the document!",
-        placeholder="Can you give me a short summary?",
-        disabled=not uploaded_file,
-    )
+model = load_model()
 
-    if uploaded_file and question:
+# ------------------------
+# Initialize chat history
+# ------------------------
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-        # Process the uploaded file and question.
-        document = uploaded_file.read().decode()
-        messages = [
-            {
-                "role": "user",
-                "content": f"Here's a document: {document} \n\n---\n\n {question}",
-            }
-        ]
+# ------------------------
+# User input
+# ------------------------
+user_input = st.text_input("Ask me something about the PDF:")
 
-        # Generate an answer using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            stream=True,
-        )
+def get_response(query, top_k=3):
+    # Embed query using local model
+    q_vec = model.encode([query], convert_to_numpy=True)
+    faiss.normalize_L2(q_vec)
+    
+    # Search FAISS
+    D, I = index.search(q_vec, top_k)
+    
+    # Retrieve top chunks
+    responses = [chunks[idx] for idx in I[0]]
+    return "\n\n".join(responses)
 
-        # Stream the response to the app using `st.write_stream`.
-        st.write_stream(stream)
+# ------------------------
+# On submit
+# ------------------------
+if user_input:
+    response = get_response(user_input)
+    st.session_state.chat_history.append(("You", user_input))
+    st.session_state.chat_history.append(("Bot", response))
+
+# ------------------------
+# Display chat history
+# ------------------------
+for sender, message in st.session_state.chat_history:
+    if sender == "You":
+        st.markdown(f"**You:** {message}")
+    else:
+        st.markdown(f"**Bot:** {message}")
+
