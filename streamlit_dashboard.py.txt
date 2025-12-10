@@ -1,0 +1,113 @@
+# streamlit_dashboard.py
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+from datetime import datetime
+
+# -----------------------------
+# Page Setup
+# -----------------------------
+st.set_page_config(page_title="Interactive Production Dashboard", layout="wide")
+st.title("📊 Interactive Production Dashboard")
+st.markdown("Filter the data using the sidebar to explore trends and key metrics.")
+
+# -----------------------------
+# Data Generation Function
+# -----------------------------
+@st.cache_data
+def generate_sample_data():
+    # df1: Main production data
+    dates = pd.date_range(start="2025-01-01", periods=20, freq="D")
+    df1 = pd.DataFrame({
+        "Date": dates,
+        "Product": ["Alpha","Beta","Gamma","Alpha","Beta","Gamma","Alpha","Beta","Gamma","Alpha",
+                    "Beta","Gamma","Alpha","Beta","Gamma","Alpha","Beta","Gamma","Alpha","Beta"],
+        "Region": ["North","South","East","West","North","South","East","West","North","South",
+                   "East","West","North","South","East","West","North","South","East","West"],
+        "Sales": [1200,1500,900,1300,1600,950,1250,1550,1000,1400,1650,980,1300,1700,1020,1350,1750,1040,1380,1800],
+        "Units": [10,12,8,11,14,7,9,13,10,12,15,8,11,16,9,12,17,10,13,18]
+    })
+
+    # df2: Lookup/master data
+    df2 = pd.DataFrame({
+        "Product": ["Alpha","Beta","Gamma","Delta","Epsilon"],
+        "Category": ["Electronics","Furniture","Appliances","Electronics","Furniture"],
+        "Manager": ["John","Susan","David","Mary","Robert"]
+    })
+
+    # Merge for easy category filtering
+    df1 = df1.merge(df2, on="Product", how="left")
+
+    return df1, df2
+
+df1, df2 = generate_sample_data()
+
+# -----------------------------
+# Sidebar Filters
+# -----------------------------
+st.sidebar.header("Filters")
+
+# Date Range Filter
+min_date = df1['Date'].min()
+max_date = df1['Date'].max()
+date_range = st.sidebar.date_input("Select Date Range", [min_date, max_date], min_value=min_date, max_value=max_date)
+
+# Product / Category Multi-Select Filter
+products = df1['Product'].unique().tolist()
+selected_products = st.sidebar.multiselect("Select Products", options=products, default=products)
+
+# Filter data based on sidebar selections
+filtered_df = df1[
+    (df1['Date'] >= pd.to_datetime(date_range[0])) &
+    (df1['Date'] <= pd.to_datetime(date_range[1])) &
+    (df1['Product'].isin(selected_products))
+]
+
+# -----------------------------
+# Main Panel: Metric Selector
+# -----------------------------
+metric = st.radio("Select Metric to Display", options=["Sales", "Units"], index=0)
+
+# -----------------------------
+# KPI Display
+# -----------------------------
+total_metric = filtered_df[metric].sum()
+avg_metric = filtered_df[metric].mean()
+st.metric(label=f"Total {metric}", value=f"{total_metric:,}", delta=f"Average: {avg_metric:.2f}")
+
+# -----------------------------
+# Chart 1: Time-Series Line Chart
+# -----------------------------
+st.subheader(f"{metric} Trend Over Time")
+fig_line = px.line(
+    filtered_df,
+    x="Date",
+    y=metric,
+    color="Product",
+    markers=True,
+    title=f"{metric} Trend by Product"
+)
+st.plotly_chart(fig_line, use_container_width=True)
+
+# -----------------------------
+# Chart 2: Category Breakdown
+# -----------------------------
+st.subheader(f"{metric} Breakdown by Category")
+category_agg = filtered_df.groupby("Category")[metric].sum().reset_index()
+fig_bar = px.bar(
+    category_agg,
+    x="Category",
+    y=metric,
+    color="Category",
+    title=f"{metric} by Category",
+    text=metric
+)
+st.plotly_chart(fig_bar, use_container_width=True)
+
+# -----------------------------
+# Optional: Additional Table Display
+# -----------------------------
+with st.expander("Show Filtered Data Table"):
+    st.dataframe(filtered_df)
